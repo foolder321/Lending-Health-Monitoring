@@ -33,43 +33,20 @@ class AssetPosition(BaseModel):
 
 
 class Position(BaseModel):
-    """Aggregated lending position for a single wallet address."""
+    wallet_address: str
+    protocol: str
+    network: str
+    supplied: List[AssetPosition]
+    borrowed: List[AssetPosition]
+    collateral_value_usd: Optional[float]
+    debt_value_usd: Optional[float]
+    health_factor: Optional[float]
+    ltv: Optional[float]
+    collateral_ratio: Optional[float]
 
-    wallet_address: str = Field(
-        ..., description="The wallet address whose position is being reported"
-    )
-    protocol: str = Field(
-        ..., description="The name of the lending protocol, e.g. 'Aave V3'"
-    )
-    network: str = Field(
-        ..., description="The blockchain network, e.g. 'Arbitrum'"
-    )
-    supplied: List[AssetPosition] = Field(
-        default_factory=list,
-        description="List of assets supplied as collateral and their values",
-    )
-    borrowed: List[AssetPosition] = Field(
-        default_factory=list,
-        description="List of assets borrowed and their values",
-    )
-    collateral_value_usd: float = Field(
-        0.0, description="Total USD value of all supplied assets"
-    )
-    debt_value_usd: float = Field(
-        0.0, description="Total USD value of all borrowed assets"
-    )
-    health_factor: Optional[float] = Field(
-        None,
-        description="User's health factor as reported by the protocol; may be null if no debt",
-    )
-    ltv: Optional[float] = Field(
-        None,
-        description="Loan‑to‑value ratio (debt / collateral). None if collateral is zero.",
-    )
-    collateral_ratio: Optional[float] = Field(
-        None,
-        description="Collateral ratio (collateral / debt). None if debt is zero.",
-    )
+    liquidation_distance_pct: Optional[float] = None
+    estimated_liquidation_price: Optional[float] = None
+    risk_status: Optional[str] = None
 
     class Config:
         arbitrary_types_allowed = True
