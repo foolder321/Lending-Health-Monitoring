@@ -1,5 +1,6 @@
 """
 Application entry point.
+<<<<<<< HEAD
 
 This module wires together all components of the monitoring system and
 starts the scheduler. It reads configuration from environment
@@ -7,12 +8,17 @@ variables, initialises logging, database connections and protocol
 adapters, and schedules periodic polling tasks. When the script is
 invoked directly (e.g. ``python app/main.py``), it runs the async
 ``run`` function which blocks until interrupted.
+=======
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
 """
 
 import asyncio
 import logging
 import signal
+<<<<<<< HEAD
 from contextlib import asynccontextmanager
+=======
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -28,13 +34,21 @@ from app.storage.db import create_engine_and_session
 from app.storage.repository import AlertRepository
 from app.storage.models import Base
 
+<<<<<<< HEAD
 
 async def _create_tables(engine) -> None:
     """Create database tables if they don't exist."""
+=======
+logger = logging.getLogger(__name__)
+
+
+async def _create_tables(engine) -> None:
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 
+<<<<<<< HEAD
 async def run() -> None:
     """Asynchronous entry point for the monitoring application."""
     settings = AppSettings()  # Load configuration from env / .env
@@ -46,6 +60,88 @@ async def run() -> None:
     await _create_tables(engine)
 
     # Instantiate components
+=======
+async def build_status_message(address: str, adapter) -> str:
+    """Fetch current position and build a Telegram-friendly status message."""
+    try:
+        position = await adapter.get_position(address)
+
+        if position is None:
+            return f"Адрес <code>{address}</code>\n\nПозиция не найдена."
+
+        hf = getattr(position, "health_factor", None)
+        collateral = getattr(position, "collateral_value_usd", None)
+        debt = getattr(position, "debt_value_usd", None)
+        ltv = getattr(position, "ltv", None)
+
+        hf_text = f"{hf:.4f}" if hf is not None else "n/a"
+        collateral_text = f"{collateral:,.2f} USD" if collateral is not None else "n/a"
+        debt_text = f"{debt:,.2f} USD" if debt is not None else "n/a"
+        ltv_text = f"{ltv:.2f}%" if ltv is not None else "n/a"
+
+        return (
+            f"📊 <b>Текущая позиция</b>\n\n"
+            f"<b>Адрес:</b> <code>{address}</code>\n"
+            f"<b>Health Factor:</b> {hf_text}\n"
+            f"<b>Collateral:</b> {collateral_text}\n"
+            f"<b>Debt:</b> {debt_text}\n"
+            f"<b>LTV:</b> {ltv_text}"
+        )
+    except Exception as exc:
+        logger.exception("Failed to build status message: %s", exc)
+        return f"Не удалось получить текущую позицию для <code>{address}</code>."
+
+
+async def telegram_command_loop(
+    settings: AppSettings,
+    telegram_service: TelegramService,
+    adapter,
+) -> None:
+    """Listen for Telegram commands."""
+    logger.info("Starting Telegram command loop")
+    primary_address = settings.addresses[0] if settings.addresses else None
+
+    while True:
+        updates = await telegram_service.get_updates()
+
+        for update in updates:
+            message = update.get("message", {})
+            chat = message.get("chat", {})
+            text = message.get("text", "")
+
+            if str(chat.get("id")) != str(settings.telegram_chat_id):
+                continue
+
+            if text == "/start":
+                reply = (
+                    "Привет 👋\n\n"
+                    "Я бот мониторинга lending-позиций.\n\n"
+                    "Команды:\n"
+                    "/start — показать это сообщение\n"
+                    "/status — показать текущее здоровье позиции"
+                )
+                await telegram_service.send_message(reply)
+
+            elif text == "/status":
+                if not primary_address:
+                    await telegram_service.send_message("В конфиге не указан ни один адрес.")
+                    continue
+
+                status_message = await build_status_message(primary_address, adapter)
+                await telegram_service.send_message(status_message)
+
+        await asyncio.sleep(2)
+
+
+async def run() -> None:
+    settings = AppSettings()
+    init_logging(settings.log_level)
+    logger.info("Starting monitoring application")
+
+    engine, session_factory = create_engine_and_session(settings)
+    await _create_tables(engine)
+
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
     adapter = AaveV3ArbitrumAdapter(settings)
     risk_engine = RiskEngine(
         warning_threshold=1.20,
@@ -55,6 +151,10 @@ async def run() -> None:
     repository = AlertRepository()
     alert_service = AlertService(repository, repeat_minutes=settings.alert_repeat_minutes)
     telegram_service = TelegramService(settings)
+<<<<<<< HEAD
+=======
+
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
     monitor_service = MonitorService(
         addresses=settings.addresses,
         adapter=adapter,
@@ -64,7 +164,10 @@ async def run() -> None:
         session_factory=session_factory,
     )
 
+<<<<<<< HEAD
     # Setup APScheduler
+=======
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         monitor_service.poll_addresses,
@@ -74,7 +177,14 @@ async def run() -> None:
     )
     scheduler.start()
 
+<<<<<<< HEAD
     # Graceful shutdown handling
+=======
+    telegram_task = asyncio.create_task(
+        telegram_command_loop(settings, telegram_service, adapter)
+    )
+
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
     stop_event = asyncio.Event()
 
     def _handle_signal(*_: int) -> None:
@@ -85,9 +195,16 @@ async def run() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal)
 
+<<<<<<< HEAD
     # Wait until signal
     await stop_event.wait()
     logger.info("Shutting down…")
+=======
+    await stop_event.wait()
+    logger.info("Shutting down...")
+
+    telegram_task.cancel()
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
     scheduler.shutdown(wait=False)
     await adapter.close()
     await telegram_service.close()
@@ -99,4 +216,8 @@ if __name__ == "__main__":
     try:
         asyncio.run(run())
     except Exception as exc:
+<<<<<<< HEAD
         logging.getLogger(__name__).exception("Application exited with error: %s", exc)
+=======
+        logging.getLogger(__name__).exception("Application exited with error: %s", exc)
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)

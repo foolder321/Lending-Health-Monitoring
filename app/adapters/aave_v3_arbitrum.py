@@ -1,4 +1,5 @@
 """
+<<<<<<< HEAD
 Adapter for Aave V3 on Arbitrum.
 
 This adapter combines on‑chain data via Web3 and off‑chain data via the
@@ -8,15 +9,30 @@ while the off‑chain API provides per‑asset balances and USD prices. The
 adapter computes aggregated collateral and debt values, derives risk
 metrics (LTV and collateral ratio) and returns a structured
 ``Position`` object consumable by the rest of the application.
+=======
+Pure RPC adapter for Aave V3 on Arbitrum.
+
+This adapter reads aggregated account data directly from the Aave Pool
+contract via JSON-RPC and returns a Position object compatible with the
+rest of the application.
+
+It does not depend on Expand / Blockdaemon DeFi API.
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
 """
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 
 import httpx
+=======
+import logging
+from typing import Dict, Any, Optional, List
+
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
@@ -24,11 +40,15 @@ from app.core.types import Position, AssetPosition
 from app.core.config import AppSettings
 from app.adapters.base import LendingProtocolAdapter
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
 logger = logging.getLogger(__name__)
 
 
 class AaveV3ArbitrumAdapter(LendingProtocolAdapter):
+<<<<<<< HEAD
     """Concrete adapter implementation for Aave V3 on Arbitrum.
 
     Parameters
@@ -44,6 +64,13 @@ class AaveV3ArbitrumAdapter(LendingProtocolAdapter):
     POOL_ADDRESSES_PROVIDER_ADDRESS: str = "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
 
     # Minimal ABI fragments for required contract methods
+=======
+    """RPC-only adapter for Aave V3 on Arbitrum."""
+
+    # Aave V3 Pool on Arbitrum
+    POOL_ADDRESS: str = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
     _POOL_ABI: List[Dict[str, Any]] = [
         {
             "inputs": [
@@ -93,6 +120,7 @@ class AaveV3ArbitrumAdapter(LendingProtocolAdapter):
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
+<<<<<<< HEAD
         self._http_client: Optional[httpx.AsyncClient] = None
 
         # Initialise Web3 if an RPC endpoint is provided
@@ -345,10 +373,87 @@ class AaveV3ArbitrumAdapter(LendingProtocolAdapter):
             borrowed=borrowed_assets,
             collateral_value_usd=total_collateral_usd,
             debt_value_usd=total_debt_usd,
+=======
+        self.web3: Optional[Web3] = None
+        self.pool_contract = None
+
+        if not settings.web3_provider_uri:
+            logger.warning("web3_provider_uri is not configured")
+            return
+
+        try:
+            self.web3 = Web3(Web3.HTTPProvider(settings.web3_provider_uri))
+            if not self.web3.is_connected():
+                logger.warning("Web3 provider is not connected: %s", settings.web3_provider_uri)
+                self.web3 = None
+                return
+
+            self.pool_contract = self.web3.eth.contract(
+                address=Web3.to_checksum_address(self.POOL_ADDRESS),
+                abi=self._POOL_ABI,
+            )
+            logger.info("Aave RPC adapter initialised successfully")
+        except Exception as exc:
+            logger.exception("Failed to initialise Aave RPC adapter: %s", exc)
+            self.web3 = None
+            self.pool_contract = None
+
+    async def get_position(self, address: str) -> Position:
+        """
+        Return aggregated Aave account data for a wallet.
+
+        Values from getUserAccountData are returned in Aave 'base currency'
+        units. For Aave V3 market data these are effectively scaled to 1e8.
+        """
+        if not self.web3 or not self.pool_contract:
+            raise RuntimeError("Aave RPC adapter is not initialised; check web3_provider_uri")
+
+        try:
+            checksum_address = Web3.to_checksum_address(address)
+        except Exception as exc:
+            raise ValueError(f"Invalid wallet address: {address}") from exc
+
+        try:
+            data = self.pool_contract.functions.getUserAccountData(checksum_address).call()
+        except ContractLogicError as exc:
+            logger.warning("Contract reverted for %s: %s", address, exc)
+            raise
+        except Exception as exc:
+            logger.exception("Failed to fetch account data for %s: %s", address, exc)
+            raise
+
+        total_collateral_base = int(data[0])
+        total_debt_base = int(data[1])
+        current_ltv_bps = int(data[4])
+        health_factor_raw = int(data[5])
+
+        # Aave account data:
+        # - collateral/debt are in base currency with 8 decimals
+        # - ltv is in basis points (e.g. 7500 = 75%)
+        # - healthFactor has 18 decimals
+        collateral_usd = total_collateral_base / 1e8
+        debt_usd = total_debt_base / 1e8
+        health_factor = None if health_factor_raw == 0 else health_factor_raw / 1e18
+        ltv = current_ltv_bps / 100.0 if current_ltv_bps else None
+
+        collateral_ratio = None
+        if debt_usd > 0:
+            collateral_ratio = collateral_usd / debt_usd
+
+        return Position(
+            wallet_address=address,
+            protocol="Aave V3",
+            network="Arbitrum",
+            supplied=[],
+            borrowed=[],
+            collateral_value_usd=collateral_usd,
+            debt_value_usd=debt_usd,
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
             health_factor=health_factor,
             ltv=ltv,
             collateral_ratio=collateral_ratio,
         )
+<<<<<<< HEAD
         return position
 
     async def close(self) -> None:
@@ -356,3 +461,9 @@ class AaveV3ArbitrumAdapter(LendingProtocolAdapter):
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
+=======
+
+    async def close(self) -> None:
+        """Nothing to close for synchronous Web3 HTTP provider."""
+        return
+>>>>>>> 5e5f26a (Working Aave V3 lending monitor with Telegram bot)
