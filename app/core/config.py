@@ -47,7 +47,7 @@ class AppSettings(BaseSettings):
     severity for a given address. This throttles identical messages
     to avoid spamming the user when the state hasn't changed."""
 
-    addresses: List[str]
+    addresses: list[str] = []
     """List of Ethereum/Arbitrum wallet addresses to monitor. Addresses
     should be provided as a comma-separated list in the ``ADDRESSES``
     environment variable."""

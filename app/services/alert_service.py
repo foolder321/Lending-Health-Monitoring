@@ -1,64 +1,178 @@
-"""
-Alert deduplication and history tracking service.
+"""Alert service for threshold-crossing notifications."""
 
-This service uses the underlying repository to determine whether a new
-alert should be sent based on past alerts for the same address and
-risk level. It enforces a minimum repeat interval so that the user
-does not receive redundant notifications when the risk state has not
-changed significantly. All sent alerts are recorded in the database for
-historical reference.
-"""
+from __future__ import annotations
 
-import datetime
-import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta, UTC
 from typing import Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.risk_engine import RiskLevel
-from app.storage.repository import AlertRepository
-
-
-logger = logging.getLogger(__name__)
+@dataclass
+class AlertDecision:
+    should_alert: bool
+    direction: Optional[str] = None   # "up" | "down" | "critical_repeat"
+    crossed_level: Optional[str] = None
+    previous_bucket: Optional[str] = None
+    current_bucket: Optional[str] = None
+    is_critical_repeat: bool = False
 
 
 class AlertService:
-    """Manage alert deduplication and persistence."""
+    """Determines whether an alert should be sent for a position."""
 
-    def __init__(self, repository: AlertRepository, repeat_minutes: int = 30) -> None:
+    def __init__(self, repository, repeat_minutes: int = 10) -> None:
         self.repository = repository
-        self.repeat_interval = datetime.timedelta(minutes=repeat_minutes)
+        self.repeat_minutes = repeat_minutes
 
-    async def should_send(
-        self, session: AsyncSession, address: str, risk_level: RiskLevel
-    ) -> bool:
-        """Determine whether a new alert should be sent.
+    @staticmethod
+    def get_hf_bucket(hf: Optional[float]) -> str:
+        """Convert health factor into a discrete alert bucket."""
+        if hf is None:
+            return "unknown"
+        if hf < 1.1:
+            return "lt_1.1"
+        if hf < 1.2:
+            return "1.1"
+        if hf < 1.25:
+            return "1.2"
+        if hf < 1.3:
+            return "1.25"
+        if hf < 1.4:
+            return "1.3"
+        if hf < 1.5:
+            return "1.4"
+        if hf < 1.6:
+            return "1.5"
+        if hf < 1.7:
+            return "1.6"
+        if hf < 1.8:
+            return "1.7"
+        if hf < 1.9:
+            return "1.8"
+        if hf < 2.0:
+            return "1.9"
+        return "2.0+"
 
-        The rules are as follows:
+    @staticmethod
+    def _bucket_rank(bucket: str) -> int:
+        order = {
+            "unknown": -1,
+            "lt_1.1": 0,
+            "1.1": 1,
+            "1.2": 2,
+            "1.25": 3,
+            "1.3": 4,
+            "1.4": 5,
+            "1.5": 6,
+            "1.6": 7,
+            "1.7": 8,
+            "1.8": 9,
+            "1.9": 10,
+            "2.0+": 11,
+        }
+        return order.get(bucket, -1)
 
-        - If no previous alert exists for the address, always send.
-        - If the risk level has changed (including transitions to ``NONE``), send.
-        - If sufficient time has elapsed since the last alert of the same level,
-          send again to remind the user.
-        - Otherwise, suppress to prevent spamming.
-
-        Note that a ``NONE`` level serves as a recovery indicator. This
-        method will allow a recovery message to be sent when the last
-        recorded risk level was not ``NONE``.
+    async def evaluate(self, session, address: str, health_factor: Optional[float]) -> AlertDecision:
         """
-        last_alert = await self.repository.get_last_alert(session, address)
-        if last_alert is None:
-            return True
-        # Always allow sending if the level differs from the last one (including NONE)
-        if last_alert.risk_level != risk_level.value:
-            return True
-        now = datetime.datetime.utcnow()
-        if now - last_alert.timestamp >= self.repeat_interval:
-            return True
-        return False
+        Return alert decision when:
+        1. HF bucket changes, or
+        2. HF is in critical zone (< 1.1) and repeat interval elapsed.
+        """
+        current_bucket = self.get_hf_bucket(health_factor)
+        last_state = await self.repository.fetch_last_alert_state(session, address)
+        previous_bucket = last_state["hf_bucket"] if last_state else None
 
-    async def record_alert(
-        self, session: AsyncSession, address: str, risk_level: RiskLevel, message: str
-    ) -> None:
-        """Persist a new alert to the database."""
-        await self.repository.log_alert(session, address, risk_level.value, message)
+        now = datetime.now(UTC)
+
+        # First observation: save state, no alert
+        if previous_bucket is None:
+            await self.repository.upsert_alert_state(
+                session=session,
+                address=address,
+                health_factor=health_factor,
+                hf_bucket=current_bucket,
+                last_alert_sent_at=None,
+            )
+            return AlertDecision(
+                should_alert=False,
+                previous_bucket=None,
+                current_bucket=current_bucket,
+            )
+
+        # Critical repeat mode
+        if current_bucket == "lt_1.1":
+            last_sent_at_raw = last_state.get("last_alert_sent_at")
+            should_repeat = False
+
+            if last_sent_at_raw is None:
+                should_repeat = True
+            else:
+                if isinstance(last_sent_at_raw, str):
+                    last_sent_at = datetime.fromisoformat(last_sent_at_raw)
+                else:
+                    last_sent_at = last_sent_at_raw
+
+                if last_sent_at.tzinfo is None:
+                    last_sent_at = last_sent_at.replace(tzinfo=UTC)
+
+                should_repeat = now - last_sent_at >= timedelta(minutes=self.repeat_minutes)
+
+            await self.repository.upsert_alert_state(
+                session=session,
+                address=address,
+                health_factor=health_factor,
+                hf_bucket=current_bucket,
+                last_alert_sent_at=now if should_repeat else last_state.get("last_alert_sent_at"),
+            )
+
+            if should_repeat:
+                return AlertDecision(
+                    should_alert=True,
+                    direction="critical_repeat",
+                    crossed_level="1.1",
+                    previous_bucket=previous_bucket,
+                    current_bucket=current_bucket,
+                    is_critical_repeat=True,
+                )
+
+            return AlertDecision(
+                should_alert=False,
+                previous_bucket=previous_bucket,
+                current_bucket=current_bucket,
+            )
+
+        # Normal bucket-crossing mode
+        if previous_bucket == current_bucket:
+            await self.repository.upsert_alert_state(
+                session=session,
+                address=address,
+                health_factor=health_factor,
+                hf_bucket=current_bucket,
+                last_alert_sent_at=last_state.get("last_alert_sent_at"),
+            )
+            return AlertDecision(
+                should_alert=False,
+                previous_bucket=previous_bucket,
+                current_bucket=current_bucket,
+            )
+
+        prev_rank = self._bucket_rank(previous_bucket)
+        curr_rank = self._bucket_rank(current_bucket)
+        direction = "up" if curr_rank > prev_rank else "down"
+        crossed_level = current_bucket if direction == "up" else previous_bucket
+
+        await self.repository.upsert_alert_state(
+            session=session,
+            address=address,
+            health_factor=health_factor,
+            hf_bucket=current_bucket,
+            last_alert_sent_at=now,
+        )
+
+        return AlertDecision(
+            should_alert=True,
+            direction=direction,
+            crossed_level=crossed_level,
+            previous_bucket=previous_bucket,
+            current_bucket=current_bucket,
+        )
